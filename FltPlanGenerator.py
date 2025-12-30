@@ -10,11 +10,11 @@ from lxml import etree
 # ==========================
 # CONFIG (defaults; overridable via env/CLI)
 # ==========================
-DB_PATH = "Database\little_navmap.sqlite"
+#DB_PATH = "Database\little_navmap.sqlite"
 OUTPUT_FILE = "KJFK_WSSS_IFR.pln"
 
 MAX_DISTANCE_KM = 1500        # bounding box size
-CRUISE_FL = 330
+CRUISE_FL = 33000
 MAX_EDGE_KM = 600
 
 # Environment prefs
@@ -134,7 +134,7 @@ class Utils:
                 prev_distance = distance
                 close_waypoints['id'] = wp_id
                 close_waypoints['idx'] = atc.index(waypoint)
-        print(f"Closest waypoint to ({lat},{lon}) is {close_waypoints['id']} at index {close_waypoints['idx']} with distance {prev_distance:.1f} km")
+        #print(f"Closest waypoint to ({lat},{lon}) is {close_waypoints['id']} at index {close_waypoints['idx']} with distance {prev_distance:.1f} km")
         return close_waypoints
 
 # ==========================
@@ -142,7 +142,7 @@ class Utils:
 # ==========================
 
 class DBInterface:
-    def __init__(self, db_path=DB_PATH):
+    def __init__(self, db_path):
         self.engine = create_engine(f"sqlite:///{db_path}")
 
     def read_sql(self, query, params=None):
@@ -173,7 +173,7 @@ class NavGraph:
         FROM airport
         WHERE ident IN (:dep, :dest)
         """
-        print(f"Loading airport data for dep={self.dep}, dest={self.dest}")
+        #print(f"Loading airport data for dep={self.dep}, dest={self.dest}")
         airports = self.db.read_sql(q, params={"dep": self.dep, "dest": self.dest})
         if len(airports) < 2:
             raise RuntimeError('Airports table missing or airport idents not found')
@@ -202,8 +202,8 @@ class NavGraph:
         wps = wps.drop_duplicates(subset='ident', keep='first').reset_index(drop=True)
 
         route_km = Utils.haversine(self.dep_lat, self.dep_lon, self.dst_lat, self.dst_lon)
-        if route_km > self.max_distance_km * 2:
-            print(f"Note: route is {route_km:.0f} km, larger than bbox; candidate airway waypoints available: {len(airways_wps)}")
+        #if route_km > self.max_distance_km * 2:
+        #    print(f"Note: route is {route_km:.0f} km, larger than bbox; candidate airway waypoints available: {len(airways_wps)}")
 
         wps['d_to_dep'] = wps.apply(lambda r: Utils.haversine(self.dep_lat, self.dep_lon, r['laty'], r['lonx']), axis=1)
         wps['d_to_dst'] = wps.apply(lambda r: Utils.haversine(self.dst_lat, self.dst_lon, r['laty'], r['lonx']), axis=1)
@@ -212,11 +212,11 @@ class NavGraph:
         ) | (wps['d_to_dep'] <= self.near_airport_km) | (wps['d_to_dst'] <= self.near_airport_km)
 
         selected = wps[wps['on_corridor']].copy()
-        print(f"Selected {len(selected)} corridor waypoints (margin={self.margin_km} km, near airports<= {self.near_airport_km} km) out of {len(wps)} candidate waypoints")
+        #print(f"Selected {len(selected)} corridor waypoints (margin={self.margin_km} km, near airports<= {self.near_airport_km} km) out of {len(wps)} candidate waypoints")
         self.waypoints = selected.drop(columns=['d_to_dep','d_to_dst','on_corridor']).reset_index(drop=True)
         dup_idents = self.waypoints['ident'][self.waypoints['ident'].duplicated(keep=False)].unique()
         if dup_idents.size > 0:
-            print(f"Warning: {len(dup_idents)} duplicate waypoint ident(s) found: {', '.join(dup_idents[:10])}{'...' if len(dup_idents) > 10 else ''}. Keeping first occurrence of each.")
+            #print(f"Warning: {len(dup_idents)} duplicate waypoint ident(s) found: {', '.join(dup_idents[:10])}{'...' if len(dup_idents) > 10 else ''}. Keeping first occurrence of each.")
             self.waypoints = self.waypoints.drop_duplicates(subset='ident', keep='first')
 
     def _load_airways(self):
@@ -237,14 +237,14 @@ class NavGraph:
 
         long_edges = air[air['dist'] > self.max_edge_km]
         short_edges = air[air['dist'] <= self.max_edge_km]
-        print(f"Airway records: total={len(air)}, short(<= {self.max_edge_km} km)={len(short_edges)}, long(> {self.max_edge_km} km)={len(long_edges)}")
+        #print(f"Airway records: total={len(air)}, short(<= {self.max_edge_km} km)={len(short_edges)}, long(> {self.max_edge_km} km)={len(long_edges)}")
 
         edges = list(zip(short_edges['from_wp'], short_edges['to_wp'], short_edges['dist']))
         self.G.add_weighted_edges_from(edges)
-        print(f"Added {len(edges)} airway edges (<= {self.max_edge_km} km)")
+        #print(f"Added {len(edges)} airway edges (<= {self.max_edge_km} km)")
 
         self.long_edge_list = list(zip(long_edges['from_wp'], long_edges['to_wp'], long_edges['dist']))
-        print(f"Graph: nodes={self.G.number_of_nodes()}, edges={self.G.number_of_edges()}")
+        #print(f"Graph: nodes={self.G.number_of_nodes()}, edges={self.G.number_of_edges()}")
 
     def nearest_wp(self, lat, lon):
         candidates = {k: v for k, v in self.wp_dict.items() if k in self.G.nodes} if hasattr(self, 'wp_dict') else {k:v for k,v in self.waypoints.set_index('ident')[['laty','lonx']].to_dict('index').items() if k in self.G.nodes}
@@ -270,7 +270,7 @@ class NavGraph:
             if dist <= max_km or did_connect == 0:
                 self.G.add_edge(ident, node, weight=dist)
                 did_connect += 1
-        print(f"Connected {ident} to {did_connect} airway node(s); nearest distance {selected[0][1]:.1f} km")
+        #print(f"Connected {ident} to {did_connect} airway node(s); nearest distance {selected[0][1]:.1f} km")
 
     def connect_fix(self, ident, lat, lon, k=8, max_km=5000, forward_bearing=None, cone_deg=120):
         if ident not in self.G:
@@ -299,7 +299,7 @@ class NavGraph:
             if dist <= max_km or did_connect == 0:
                 self.G.add_edge(ident, node, weight=dist)
                 did_connect += 1
-        print(f"Connected fix {ident} to {did_connect} airway node(s); nearest distance {selected[0][1]:.1f} km")
+        #print(f"Connected fix {ident} to {did_connect} airway node(s); nearest distance {selected[0][1]:.1f} km")
 
     def ensure_node_connected(self, node, is_start=True):
         if node in self.G:
@@ -311,7 +311,7 @@ class NavGraph:
             if node in self.G:
                 return node
         substitute = self.nearest_wp(self.dep_lat if is_start else self.dst_lat, self.dep_lon if is_start else self.dst_lon)
-        print(f"Warning: node {node} not connected or missing coordinates; using nearest airway node {substitute} instead")
+        #print(f"Warning: node {node} not connected or missing coordinates; using nearest airway node {substitute} instead")
         return substitute
 
     def get_coords(self, ident):
@@ -362,7 +362,7 @@ class SidStarExtractor:
     def extract_sid_fixes(self, airport_ident):
         fixes = []
         try:
-            print(f"Extracting SID fixes for airport {airport_ident} with preferred SID name '{self.preferred_sid_name}' and preferred runway '{self.preferred_sid_runway}'")
+            #print(f"Extracting SID fixes for airport {airport_ident} with preferred SID name '{self.preferred_sid_name}' and preferred runway '{self.preferred_sid_runway}'")
             apps = self.db.read_sql("SELECT approach_id, arinc_name, fix_ident FROM approach WHERE airport_ident = :dep AND fix_ident = :sid_name", params={"dep": airport_ident,"sid_name": self.preferred_sid_name })
             if not apps.empty:
                 candidates = []
@@ -424,12 +424,12 @@ class SidStarExtractor:
                             # prefer candidate with smaller last-fix or average distance
                             matched.sort(key=lambda x: (x[3], x[4]))
                             chosen = matched[0]
-                            print(f"Selected approach {chosen[0]} ({chosen[1]}) as SID (preferred name matched)")
+                            #print(f"Selected approach {chosen[0]} ({chosen[1]}) as SID (preferred name matched)")
                             return chosen[2]
                     # fallback: choose candidate with smallest last-fix distance then avg distance
                     candidates.sort(key=lambda x: (x[3], x[4]))
                     chosen = candidates[0]
-                    print(f"Selected approach {chosen[0]} ({chosen[1]}) as SID (last-fix dist {chosen[3]:.1f} km, avg {chosen[4]:.1f} km)")
+                    #print(f"Selected approach {chosen[0]} ({chosen[1]}) as SID (last-fix dist {chosen[3]:.1f} km, avg {chosen[4]:.1f} km)")
                     return chosen[2]
         except Exception:
             pass
@@ -463,7 +463,7 @@ class SidStarExtractor:
                 if candidates:
                     candidates.sort(key=lambda x: x[2])
                     chosen = candidates[0]
-                    print(f"Selected transition {chosen[0]} as SID (avg dist to airway nodes {chosen[2]:.1f} km)")
+                    #print(f"Selected transition {chosen[0]} as SID (avg dist to airway nodes {chosen[2]:.1f} km)")
                     return chosen[1]
         except Exception:
             pass
@@ -480,10 +480,10 @@ class SidStarExtractor:
                 self.generated_fix_coords[name] = (float(r['laty']), float(r['lonx']))
                 fixes.append(name)
             if fixes:
-                if self.preferred_sid_runway:
-                    print(f"Fallback: using runway start positions for preferred runway {self.preferred_sid_runway} as SID-like fixes ({len(fixes)} entries)")
-                else:
-                    print(f"Fallback: using runway start positions as SID-like fixes ({len(fixes)} entries)")
+                #if self.preferred_sid_runway:
+                #    print(f"Fallback: using runway start positions for preferred runway {self.preferred_sid_runway} as SID-like fixes ({len(fixes)} entries)")
+                #else:
+                #    print(f"Fallback: using runway start positions as SID-like fixes ({len(fixes)} entries)")
                 return fixes
         except Exception:
             pass
@@ -525,7 +525,7 @@ class SidStarExtractor:
                         self.generated_fix_coords[name] = (float(r['fix_laty']), float(r['fix_lonx']))
                         fixes.append(name)
                 if fixes:
-                    print(f"Selected approach id {chosen_aid} for STAR with {len(fixes)} fixes")
+                    #print(f"Selected approach id {chosen_aid} for STAR with {len(fixes)} fixes")
                     return fixes
         except Exception:
             pass
@@ -562,23 +562,23 @@ class RouteBuilder:
     def load_sid_star(self):
         if self.include_sid:
             self.sid_fixes = self.sidstar.extract_sid_fixes(self.nav.dep)
-            if self.sid_fixes:
-                print(f"Using SID fixes: {self.sid_fixes[:10]}{'...' if len(self.sid_fixes)>10 else ''}")
-            else:
-                print("No SID fixes found for airport; continuing without SID.")
+            #if self.sid_fixes:
+            #    print(f"Using SID fixes: {self.sid_fixes[:10]}{'...' if len(self.sid_fixes)>10 else ''}")
+            #else:
+            #    print("No SID fixes found for airport; continuing without SID.")
         else:
             self.sid_fixes = []
-            print("Skipping SID extraction (not requested by user).")
+           # print("Skipping SID extraction (not requested by user).")
 
         if self.include_star:
             self.star_fixes = self.sidstar.extract_star_fixes(self.nav.dest, preferred_name=self.sidstar.preferred_star_name)
-            if self.star_fixes:
-                print(f"Using STAR fixes: {self.star_fixes[:10]}{'...' if len(self.star_fixes)>10 else ''}")
-            else:
-                print("No STAR fixes found for airport; continuing without STAR.")
+            #if self.star_fixes:
+            #    print(f"Using STAR fixes: {self.star_fixes[:10]}{'...' if len(self.star_fixes)>10 else ''}")
+            #else:
+            # print("No STAR fixes found for airport; continuing without STAR.")
         else:
             self.star_fixes = []
-            print("Skipping STAR extraction (not requested by user).")
+            #print("Skipping STAR extraction (not requested by user).")
 
     def build_route(self):
         # connect airports
@@ -590,7 +590,7 @@ class RouteBuilder:
             for i, f in enumerate(self.sid_fixes):
                 lat, lon = self.nav.get_coords(f)
                 if lat is None:
-                    print(f"Warning: no coordinates for fix {f}")
+                #    print(f"Warning: no coordinates for fix {f}")
                     continue
                 if i+1 < len(self.sid_fixes):
                     nlat, nlon = self.nav.get_coords(self.sid_fixes[i+1])
@@ -615,7 +615,7 @@ class RouteBuilder:
         end_node = self.nav.ensure_node_connected(end_node, is_start=False)
 
 
-        print(f"Computing airway subpath from {start_node} to {end_node} using graph nodes: {len(self.nav.G.nodes)} nodes, {len(self.nav.G.edges)} edges")
+        #print(f"Computing airway subpath from {start_node} to {end_node} using graph nodes: {len(self.nav.G.nodes)} nodes, {len(self.nav.G.edges)} edges")
         try:
             self.path = nx.shortest_path(self.nav.G, start_node, end_node, weight='weight')
         except nx.NodeNotFound as e:
@@ -656,11 +656,11 @@ class RouteBuilder:
                         self.nav.G.add_node(first_star)
                     # (re)connect with weight equal to great-circle distance
                     self.nav.G.add_edge(first_star, best, weight=best_dist)
-                    print(f"Connected first STAR fix {first_star} to nearest path node {best} (dist {best_dist:.1f} km)")
-                else:
-                    print(f"Warning: no suitable node found to connect first STAR fix {first_star}")
-            else:
-                print(f"Warning: no coordinates for first STAR fix {first_star}")
+                   # print(f"Connected first STAR fix {first_star} to nearest path node {best} (dist {best_dist:.1f} km)")
+                #else:
+                   # print(f"Warning: no suitable node found to connect first STAR fix {first_star}")
+            #else:
+                #print(f"Warning: no coordinates for first STAR fix {first_star}")
 
      
     def merge_full_route(self):
@@ -676,15 +676,15 @@ class RouteBuilder:
                 dedup.append(wp)
                 seen.add(wp)
         removed = len(route) - len(dedup)
-        if removed:
-            print(f"Removed {removed} duplicated waypoint(s) from route")
+        #if removed:
+        #    print(f"Removed {removed} duplicated waypoint(s) from route")
         dedup.append(self.nav.dest)
         final_route = []
         for wp in dedup:
             if not final_route or final_route[-1] != wp:
                 final_route.append(wp)
-        if self.nav.dest in final_route[:-1]:
-            print(f"Warning: destination {self.nav.dest} found in middle of route; it was moved to the end")
+        #if self.nav.dest in final_route[:-1]:
+        #    print(f"Warning: destination {self.nav.dest} found in middle of route; it was moved to the end")
         return final_route
 
 class PLNWriter:
@@ -696,7 +696,7 @@ class PLNWriter:
         self.dest_elev = dest_elev
         self.cruise_fl = cruise_fl
         self.route_type = 'HighAlt' if cruise_fl >= 180 else 'LowAlt'
-        self.cruise_alt_ft = int(cruise_fl * 100)
+        self.cruise_alt_ft = int(cruise_fl)
 
     def _build_root(self, dep, dest):
         root = etree.Element('SimBase.Document', Type='AceXML', version='1,0')
@@ -784,14 +784,14 @@ class PLNWriter:
                 wp_type = 'Intersection'
               etree.SubElement(atc, 'ATCWaypointType').text = wp_type
               lat, lon = lat_lon
-              wpos = Utils.format_dms(lat, lon, 10000.0) if wp_type == 'Intersection' else Utils.format_dms(lat, lon, 0.0)
+              wpos = Utils.format_dms(lat, lon, self.cruise_alt_ft) if wp_type == 'Intersection' else Utils.format_dms(lat, lon, 0.0)
               etree.SubElement(atc, 'WorldPosition').text = wpos
               ica = etree.SubElement(atc, 'ICAO')
               etree.SubElement(ica, 'ICAOIdent').text = wp
 
         out_tree = etree.ElementTree(root)
         out_tree.write(file_path, pretty_print=True, xml_declaration=True, encoding='UTF-8')
-        print('PLN flight plan generated:', file_path)
+        #print('PLN flight plan generated:', file_path)
 
     def get_close_waypoints(self, lat=0, lon=0, path=None):
         """Deprecated wrapper delegating to Utils.get_close_waypoints(nav, ...)."""
@@ -813,7 +813,7 @@ def parse_bool_env(name):
     return None
 
 
-def generate_route(db_path=DB_PATH, dep=None, dest=None, include_sid=None, include_star=None):
+def generate_route(db_path, dep=None, dest=None, include_sid=None, include_star=None):
     """Build nav objects and return (db, nav, writer, route).
 
     include_sid/include_star should be resolved by the caller (env/interactive).
@@ -821,31 +821,48 @@ def generate_route(db_path=DB_PATH, dep=None, dest=None, include_sid=None, inclu
     db = DBInterface(db_path)
     nav = NavGraph(db, dep=dep, dest=dest)
 
-    sidstar = SidStarExtractor(nav, preferred_sid_name=PREFERRED_SID_NAME, preferred_star_name=PREFERRED_STAR_NAME, preferred_sid_runway=PREFERRED_SID_RUNWAY)
-    
+    if include_sid == True or include_star == True:
+        sidstar = SidStarExtractor(nav, preferred_sid_name=PREFERRED_SID_NAME, preferred_star_name=PREFERRED_STAR_NAME, preferred_sid_runway=PREFERRED_SID_RUNWAY)
+    else:
+        sidstar = None
     
     rb = RouteBuilder(nav, sidstar, include_sid=include_sid, include_star=include_star)
-    rb.load_sid_star()
-    rb.build_route()
     
+    if sidstar != None:
+        rb.load_sid_star()
+    
+    rb.build_route()
     route = rb.merge_full_route()
-
-
     writer = PLNWriter(nav)
     return db, nav, writer, route
 
 
-def Create_plan_with_close_waypoint(db_path=DB_PATH, dep=None, dest=None, output_file=OUTPUT_FILE, include_sid=None, include_star=None,lat=None, lon=None):
+def Create_plan_with_close_waypoint(db_path,dep=None, dest=None, output_file=OUTPUT_FILE, include_sid=None, include_star=None,lat=None, lon=None,altitude=33000, Dep_RW = None, Des_RW = None, Dep_SID = None, Des_STAR = None):
+
+    
+    CRUISE_FL = altitude
+    
+    if Dep_RW != None:
+        PREFERRED_DEP_RW = Dep_RW
+
+    if Des_RW != None:
+        PREFERRED_DES_RW = Des_RW
+    
+    if Dep_SID != None:
+        PREFERRED_SID = Dep_SID
+    
+    if Dep_SID != None:
+        PREFERRED_STAR = Des_STAR
 
     # build route using helper
-    db, nav, writer, route = generate_route(db_path=db_path, dep=dep, dest=dest, include_sid=include_sid, include_star=include_star)
+    db, nav, writer, route = generate_route(db_path, dep=dep, dest=dest, include_sid=include_sid, include_star=include_star)
 
     writer = PLNWriter(nav)
     writer.write_lnm_pln(output_file, route, dep=dep, dest=dest)
     ok = writer.validate_pln(output_file)
-    print('Validation:', 'OK ✅' if ok else 'FAILED ⚠️')
-    print('Route:')
-    print(' '.join(route))
+    #print('Validation:', 'OK ✅' if ok else 'FAILED ⚠️')
+    #print('Route:')
+    #print(' '.join(route))
 
     close_waypoints = {}
     if lat is not None and lon is not None:
@@ -864,7 +881,7 @@ def Create_plan_with_close_waypoint(db_path=DB_PATH, dep=None, dest=None, output
     #return route
 
 
-
+DB_PATH = "Database\little_navmap.sqlite"
 #Test call
-close_waypoints = Create_plan_with_close_waypoint(db_path=DB_PATH, dep="VABB", dest="EHAM", output_file="Cruise_flt.pln", include_sid=1, include_star=1,lat=50.78694534301758, lon=12.096664428710938)
-print(close_waypoints)
+#close_waypoints = Create_plan_with_close_waypoint(db_path=DB_PATH,dep="VABB", dest="EDDF", output_file="Cruise_flt.pln", include_sid=0, include_star=0,lat=50.78694534301758, lon=12.096664428710938 )
+#print(close_waypoints)
