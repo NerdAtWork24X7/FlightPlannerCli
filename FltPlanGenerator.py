@@ -57,6 +57,16 @@ class Utils:
         return lat-d, lat+d, lon-d, lon+d
 
     @staticmethod
+    def bounding_box_route(lat1, lon1, lat2, lon2, margin_km):
+        minlat = min(lat1, lat2) - margin_km / 111
+        maxlat = max(lat1, lat2) + margin_km / 111
+        avg_lat = math.radians((minlat + maxlat) / 2)
+        margin_deg_lon = margin_km / (111 * math.cos(avg_lat))
+        minlon = min(lon1, lon2) - margin_deg_lon
+        maxlon = max(lon1, lon2) + margin_deg_lon
+        return minlat, maxlat, minlon, maxlon
+
+    @staticmethod
     def parse_atc_route(atc_str):
         tokens = [t.strip().strip(',') for t in atc_str.strip().split() if t.strip()]
         origin = origin_rwy = dest = dest_rwy = None
@@ -165,7 +175,8 @@ class NavGraph:
         self._load_waypoints()
         self._load_airways()
         self._build_graph()
-        self.wp_dict = self.waypoints.set_index('ident')[['laty','lonx']].to_dict('index')
+        self.wp_dict = self.waypoints[['ident','laty','lonx','region']].to_dict('index')
+        self.ident_to_wp_id = {v['ident']: k for k, v in self.wp_dict.items()}
 
     def _load_airports(self):
         q = """
@@ -182,24 +193,28 @@ class NavGraph:
         self.dep_lat, self.dep_lon = airports_idx.loc[self.dep, ['laty', 'lonx']]
         self.dst_lat, self.dst_lon = airports_idx.loc[self.dest, ['laty', 'lonx']]
 
-        self.minlat, self.maxlat, self.minlon, self.maxlon = Utils.bounding_box(self.dep_lat, self.dep_lon, self.max_distance_km)
+        route_km = Utils.haversine(self.dep_lat, self.dep_lon, self.dst_lat, self.dst_lon)
+        if route_km > 2 * self.max_distance_km:
+            self.minlat, self.maxlat, self.minlon, self.maxlon = Utils.bounding_box_route(self.dep_lat, self.dep_lon, self.dst_lat, self.dst_lon, self.max_distance_km)
+        else:
+            self.minlat, self.maxlat, self.minlon, self.maxlon = Utils.bounding_box(self.dep_lat, self.dep_lon, self.max_distance_km)
 
     def _load_waypoints(self):
         q_bbox = """
-        SELECT ident, laty, lonx
+        SELECT waypoint_id, ident, laty, lonx
         FROM waypoint
         WHERE laty BETWEEN :minlat AND :maxlat
         AND lonx BETWEEN :minlon AND :maxlon
         """
         bbox = self.db.read_sql(q_bbox, params={"minlat": self.minlat, "maxlat": self.maxlat, "minlon": self.minlon, "maxlon": self.maxlon})
         q_airways = """
-        SELECT DISTINCT w.ident, w.laty, w.lonx
+        SELECT DISTINCT w.waypoint_id, w.ident, w.laty, w.lonx, w.region
         FROM waypoint w
         JOIN airway a ON a.from_waypoint_id = w.waypoint_id OR a.to_waypoint_id = w.waypoint_id
         """
         airways_wps = self.db.read_sql(q_airways)
-        wps = pd.concat([bbox, airways_wps], ignore_index=True)
-        wps = wps.drop_duplicates(subset='ident', keep='first').reset_index(drop=True)
+        wps = pd.concat([bbox.assign(region=None), airways_wps], ignore_index=True).fillna('')
+        wps = wps.drop_duplicates(subset=['waypoint_id'], keep='first').reset_index(drop=True)
 
         route_km = Utils.haversine(self.dep_lat, self.dep_lon, self.dst_lat, self.dst_lon)
         #if route_km > self.max_distance_km * 2:
@@ -212,27 +227,27 @@ class NavGraph:
         ) | (wps['d_to_dep'] <= self.near_airport_km) | (wps['d_to_dst'] <= self.near_airport_km)
 
         selected = wps[wps['on_corridor']].copy()
+
         #print(f"Selected {len(selected)} corridor waypoints (margin={self.margin_km} km, near airports<= {self.near_airport_km} km) out of {len(wps)} candidate waypoints")
         self.waypoints = selected.drop(columns=['d_to_dep','d_to_dst','on_corridor']).reset_index(drop=True)
-        dup_idents = self.waypoints['ident'][self.waypoints['ident'].duplicated(keep=False)].unique()
-        if dup_idents.size > 0:
-            #print(f"Warning: {len(dup_idents)} duplicate waypoint ident(s) found: {', '.join(dup_idents[:10])}{'...' if len(dup_idents) > 10 else ''}. Keeping first occurrence of each.")
-            self.waypoints = self.waypoints.drop_duplicates(subset='ident', keep='first')
+        self.waypoints = self.waypoints.set_index('waypoint_id')
+
+        #dup_idents = self.waypoints['ident'][self.waypoints['ident'].duplicated(keep=False)].unique()
+        #if dup_idents.size > 0:
+        #    print(f"Warning: {len(dup_idents)} duplicate waypointident(s) found: {', '.join(dup_idents[:10])}{'...' if len(dup_idents) > 10 else ''}. Keeping first occurrence of each.")
 
     def _load_airways(self):
         q = """
-        SELECT a.airway_name, w1.ident AS from_wp, w2.ident AS to_wp
+        SELECT a.airway_name, a.from_waypoint_id AS from_wp, a.to_waypoint_id AS to_wp
         FROM airway a
-        JOIN waypoint w1 ON a.from_waypoint_id = w1.waypoint_id
-        JOIN waypoint w2 ON a.to_waypoint_id = w2.waypoint_id
         """
         self.airways = self.db.read_sql(q)
 
     def _build_graph(self):
-        valid_ids = set(self.waypoints['ident'])
+        valid_ids = set(self.waypoints.index)
         air = self.airways[self.airways['from_wp'].isin(valid_ids) & self.airways['to_wp'].isin(valid_ids)].copy()
-        air = air.merge(self.waypoints.rename(columns={'ident':'from_wp','laty':'from_laty','lonx':'from_lonx'}), on='from_wp', how='left')
-        air = air.merge(self.waypoints.rename(columns={'ident':'to_wp','laty':'to_laty','lonx':'to_lonx'}), on='to_wp', how='left')
+        air = air.merge(self.waypoints[['ident','laty','lonx']].rename(columns={'ident':'from_ident','laty':'from_laty','lonx':'from_lonx'}), left_on='from_wp', right_index=True)
+        air = air.merge(self.waypoints[['ident','laty','lonx']].rename(columns={'ident':'to_ident','laty':'to_laty','lonx':'to_lonx'}), left_on='to_wp', right_index=True)
         air['dist'] = air.apply(lambda r: Utils.haversine(r['from_laty'], r['from_lonx'], r['to_laty'], r['to_lonx']), axis=1)
 
         long_edges = air[air['dist'] > self.max_edge_km]
@@ -246,36 +261,48 @@ class NavGraph:
         self.long_edge_list = list(zip(long_edges['from_wp'], long_edges['to_wp'], long_edges['dist']))
         #print(f"Graph: nodes={self.G.number_of_nodes()}, edges={self.G.number_of_edges()}")
 
+
     def nearest_wp(self, lat, lon):
-        candidates = {k: v for k, v in self.wp_dict.items() if k in self.G.nodes} if hasattr(self, 'wp_dict') else {k:v for k,v in self.waypoints.set_index('ident')[['laty','lonx']].to_dict('index').items() if k in self.G.nodes}
+        candidates = {k: v for k, v in self.wp_dict.items() if k in self.G.nodes}
         if not candidates:
             raise RuntimeError("No waypoint candidates available in the airway graph to compute a route")
         return min(candidates.items(), key=lambda x: Utils.haversine(lat, lon, x[1]['laty'], x[1]['lonx']))[0]
 
     def connect_airport(self, ident, lat, lon, k=8, max_km=5000):
+        
         if ident not in self.G:
             self.G.add_node(ident)
         candidates = []
+        
+
         for n, p in self.wp_dict.items():
+            if n == "AA":
+                print(n, p['laty'], p['lonx'])
+
             if n in self.G.nodes:
                 d = Utils.haversine(lat, lon, p['laty'], p['lonx'])
                 candidates.append((n, d))
+
         if not candidates:
             print(f"Warning: no airway waypoints available to connect airport {ident}")
             return
         candidates.sort(key=lambda x: x[1])
         selected = candidates[:k]
         did_connect = 0
+
         for node, dist in selected:
             if dist <= max_km or did_connect == 0:
                 self.G.add_edge(ident, node, weight=dist)
                 did_connect += 1
+        
+
         #print(f"Connected {ident} to {did_connect} airway node(s); nearest distance {selected[0][1]:.1f} km")
 
     def connect_fix(self, ident, lat, lon, k=8, max_km=5000, forward_bearing=None, cone_deg=120):
         if ident not in self.G:
             self.G.add_node(ident)
         candidates = []
+        
         for n, p in self.wp_dict.items():
             if n in self.G.nodes:
                 d = Utils.haversine(lat, lon, p['laty'], p['lonx'])
@@ -301,6 +328,7 @@ class NavGraph:
                 did_connect += 1
         #print(f"Connected fix {ident} to {did_connect} airway node(s); nearest distance {selected[0][1]:.1f} km")
 
+
     def ensure_node_connected(self, node, is_start=True):
         if node in self.G:
             return node
@@ -315,9 +343,12 @@ class NavGraph:
         return substitute
 
     def get_coords(self, ident):
-        if ident in self.wp_dict:
-            p = self.wp_dict[ident]
-            return p['laty'], p['lonx']
+        if isinstance(ident, int) or (isinstance(ident, str) and ident.isdigit()):
+            wp_id = int(ident)
+            if wp_id in self.wp_dict:
+                p = self.wp_dict[wp_id]
+                return p['laty'], p['lonx']
+
         if ident in self.generated_fix_coords:
             return self.generated_fix_coords[ident]
         if ident == self.dep:
@@ -376,16 +407,16 @@ class SidStarExtractor:
                     dists = []
                     if pd.notna(a.get('fix_ident')):
                         seq.append(a['fix_ident'])
-                        if a['fix_ident'] in self.wp_dict:
-                            p = self.wp_dict[a['fix_ident']]
+                        if a['fix_ident'] in self.nav.ident_to_wp_id:
+                            p = self.wp_dict[self.nav.ident_to_wp_id[a['fix_ident']]]
                             dists.append(nearest_node_dist(p['laty'], p['lonx']))
                     
                     legs = self.db.read_sql("SELECT approach_leg_id, fix_ident, fix_laty, fix_lonx FROM approach_leg WHERE approach_id = :aid ORDER BY approach_leg_id", params={"aid": aid})
                     for _, r in legs.iterrows():
                         if pd.notna(r.get('fix_ident')):
                             seq.append(r['fix_ident'])
-                            if r['fix_ident'] in self.wp_dict:
-                                p = self.wp_dict[r['fix_ident']]
+                            if r['fix_ident'] in self.nav.ident_to_wp_id:
+                                p = self.wp_dict[self.nav.ident_to_wp_id[r['fix_ident']]]
                                 dists.append(nearest_node_dist(p['laty'], p['lonx']))
                         elif pd.notna(r.get('fix_laty')) and pd.notna(r.get('fix_lonx')):
                             name = f"{airport_ident}_APP_{aid}_{int(r['approach_leg_id'])}"
@@ -395,8 +426,8 @@ class SidStarExtractor:
                     if seq:
                         last_fix = seq[-1]
                         last_latlon = None
-                        if last_fix in self.wp_dict:
-                            last_latlon = (self.wp_dict[last_fix]['laty'], self.wp_dict[last_fix]['lonx'])
+                        if last_fix in self.nav.ident_to_wp_id:
+                            last_latlon = (self.wp_dict[self.nav.ident_to_wp_id[last_fix]]['laty'], self.wp_dict[self.nav.ident_to_wp_id[last_fix]]['lonx'])
                         elif last_fix in self.generated_fix_coords:
                             last_latlon = self.generated_fix_coords[last_fix]
                         last_dist = nearest_node_dist(last_latlon[0], last_latlon[1]) if last_latlon else float('inf')
@@ -446,11 +477,12 @@ class SidStarExtractor:
                     legs = self.db.read_sql("SELECT transition_leg_id, fix_ident, fix_laty, fix_lonx FROM transition_leg WHERE transition_id = :tid ORDER BY transition_leg_id", params={"tid": tid})
                     seq = []
                     dists = []
+
                     for _, r in legs.iterrows():
                         if pd.notna(r.get('fix_ident')):
                             seq.append(r['fix_ident'])
-                            if r['fix_ident'] in self.wp_dict:
-                                p = self.wp_dict[r['fix_ident']]
+                            if r['fix_ident'] in self.nav.ident_to_wp_id:
+                                p = self.wp_dict[self.nav.ident_to_wp_id[r['fix_ident']]]
                                 dists.append(nearest_node_dist(p['laty'], p['lonx']))
                         elif pd.notna(r.get('fix_laty')) and pd.notna(r.get('fix_lonx')):
                             name = f"{airport_ident}_TRANS_{tid}_{int(r['transition_leg_id'])}"
@@ -624,14 +656,25 @@ class RouteBuilder:
         except nx.NetworkXNoPath:
             print("No path found between SID/STAR with filtered edges; adding long airway edges (fallback) and retrying")
             self.nav.G.add_weighted_edges_from(self.nav.long_edge_list)
-            self.path = nx.shortest_path(self.nav.G, start_node, end_node, weight='weight')
+            try:
+                self.path = nx.shortest_path(self.nav.G, start_node, end_node, weight='weight')
+    
+            except nx.NetworkXNoPath:
+                print("Still no path found; adding direct great circle route")
+                start_lat, start_lon = self.nav.get_coords(start_node)
+                end_lat, end_lon = self.nav.get_coords(end_node)
+                if start_lat is not None and end_lat is not None:
+                    dist = Utils.haversine(start_lat, start_lon, end_lat, end_lon)
+                    self.nav.G.add_edge(start_node, end_node, weight=dist)
+                    self.path = [start_node, end_node]
+                else:
+                    raise RuntimeError("No coordinates for start or end node, cannot add direct route")
 
         if self.path and self.path[0] == start_node:
             self.path = self.path[1:]
         if self.path and self.path[-1] == end_node:
             self.path = self.path[:-1]
               
-
 
         # Connect 1st STAR fix to closest waypoint
         if self.star_fixes:
@@ -685,7 +728,10 @@ class RouteBuilder:
                 final_route.append(wp)
         #if self.nav.dest in final_route[:-1]:
         #    print(f"Warning: destination {self.nav.dest} found in middle of route; it was moved to the end")
+        
+        
         return final_route
+    
 
 class PLNWriter:
     def __init__(self, nav: NavGraph, dep_name=None, dest_name=None, dep_elev=0.0, dest_elev=0.0, cruise_fl=CRUISE_FL):
@@ -773,21 +819,24 @@ class PLNWriter:
         for wp in route_list:
             if wp in added:
                 continue
-            
-            lat_lon = self.nav.get_coords(wp)
-            if lat_lon and lat_lon[0] is not None: 
-              added.add(wp)
-              atc = etree.SubElement(fp, 'ATCWaypoint', id=wp)
-              if wp in (dep, dest):
-                wp_type = 'Airport'
-              else:
-                wp_type = 'Intersection'
+
+            if isinstance(wp, int) or (isinstance(wp, str) and wp.isdigit()):
+                ident = self.nav.wp_dict[int(wp)]['ident']
+                lat_lon = self.nav.get_coords(wp)
+            else:
+                ident = wp
+                lat_lon = self.nav.get_coords(wp)
+
+            if lat_lon and lat_lon[0] is not None:
+              added.add(str(wp))
+              atc = etree.SubElement(fp, 'ATCWaypoint', id=ident)
+              wp_type = 'Airport' if ident in (dep, dest) else 'Intersection'
               etree.SubElement(atc, 'ATCWaypointType').text = wp_type
               lat, lon = lat_lon
               wpos = Utils.format_dms(lat, lon, self.cruise_alt_ft) if wp_type == 'Intersection' else Utils.format_dms(lat, lon, 0.0)
               etree.SubElement(atc, 'WorldPosition').text = wpos
               ica = etree.SubElement(atc, 'ICAO')
-              etree.SubElement(ica, 'ICAOIdent').text = wp
+              etree.SubElement(ica, 'ICAOIdent').text = ident
 
         out_tree = etree.ElementTree(root)
         out_tree.write(file_path, pretty_print=True, xml_declaration=True, encoding='UTF-8')
@@ -862,7 +911,17 @@ def Create_plan_with_close_waypoint(db_path,dep=None, dest=None, output_file=OUT
     ok = writer.validate_pln(output_file)
     #print('Validation:', 'OK ✅' if ok else 'FAILED ⚠️')
     #print('Route:')
-    #print(' '.join(route))
+
+    # Get display names for the route
+    #route_names = []
+    #for wp in route:
+    #    if isinstance(wp, int) or (isinstance(wp, str) and wp.isdigit()):
+    #        ident = nav.wp_dict[int(wp)]['ident']
+    #        route_names.append(ident)
+    #    else:
+    #        route_names.append(wp)
+#
+    #print(' '.join(route_names))
 
     close_waypoints = {}
     if lat is not None and lon is not None:
@@ -883,5 +942,6 @@ def Create_plan_with_close_waypoint(db_path,dep=None, dest=None, output_file=OUT
 
 DB_PATH = "Database\little_navmap.sqlite"
 #Test call
-#close_waypoints = Create_plan_with_close_waypoint(db_path=DB_PATH,dep="VABB", dest="EDDF", output_file="Cruise_flt.pln", include_sid=0, include_star=0,lat=50.78694534301758, lon=12.096664428710938 )
+#close_waypoints = Create_plan_with_close_waypoint(db_path=DB_PATH,dep="NZAA", dest="NTAA", output_file="Cruise_flt.pln", include_sid=0, include_star=0,lat=50.78694534301758, lon=12.096664428710938 )
+#close_waypoints = Create_plan_with_close_waypoint(db_path=DB_PATH,dep="KATL", dest="NZAA", output_file="Cruise_flt.pln", include_sid=0, include_star=0,lat=50.78694534301758, lon=12.096664428710938 )
 #print(close_waypoints)
