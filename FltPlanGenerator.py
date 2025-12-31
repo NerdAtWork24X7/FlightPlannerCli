@@ -13,7 +13,7 @@ from lxml import etree
 #DB_PATH = "Database\little_navmap.sqlite"
 OUTPUT_FILE = "KJFK_WSSS_IFR.pln"
 
-MAX_DISTANCE_KM = 1500        # bounding box size
+MAX_DISTANCE_KM = 1500       # bounding box size
 CRUISE_FL = 33000
 MAX_EDGE_KM = 600
 
@@ -159,7 +159,7 @@ class DBInterface:
         return pd.read_sql(query, self.engine, params=params or {})
 
 class NavGraph:
-    def __init__(self, db: DBInterface, dep=None, dest=None, max_distance_km=MAX_DISTANCE_KM, max_edge_km=MAX_EDGE_KM, margin_km=800, near_airport_km=600):
+    def __init__(self, db: DBInterface, dep=None, dest=None, max_distance_km=MAX_DISTANCE_KM, max_edge_km=MAX_EDGE_KM, margin_km=18000, near_airport_km=1600):
         self.db = db
         self.dep = dep
         self.dest = dest
@@ -658,7 +658,7 @@ class RouteBuilder:
             self.nav.G.add_weighted_edges_from(self.nav.long_edge_list)
             try:
                 self.path = nx.shortest_path(self.nav.G, start_node, end_node, weight='weight')
-    
+                print(self.path)
             except nx.NetworkXNoPath:
                 print("Still no path found; adding direct great circle route")
                 start_lat, start_lon = self.nav.get_coords(start_node)
@@ -943,5 +943,5 @@ def Create_plan_with_close_waypoint(db_path,dep=None, dest=None, output_file=OUT
 DB_PATH = "Database\little_navmap.sqlite"
 #Test call
 #close_waypoints = Create_plan_with_close_waypoint(db_path=DB_PATH,dep="NZAA", dest="NTAA", output_file="Cruise_flt.pln", include_sid=0, include_star=0,lat=50.78694534301758, lon=12.096664428710938 )
-#close_waypoints = Create_plan_with_close_waypoint(db_path=DB_PATH,dep="KATL", dest="NZAA", output_file="Cruise_flt.pln", include_sid=0, include_star=0,lat=50.78694534301758, lon=12.096664428710938 )
+#close_waypoints = Create_plan_with_close_waypoint(db_path=DB_PATH,dep="NZAA", dest="SCIP", output_file="Cruise_flt.pln", include_sid=0, include_star=0,lat=50.78694534301758, lon=12.096664428710938 )
 #print(close_waypoints)
