@@ -913,22 +913,24 @@ def Create_plan_with_close_waypoint(db_path,dep=None, dest=None, output_file=OUT
     #print('Route:')
 
     # Get display names for the route
-    #route_names = []
-    #for wp in route:
-    #    if isinstance(wp, int) or (isinstance(wp, str) and wp.isdigit()):
-    #        ident = nav.wp_dict[int(wp)]['ident']
-    #        route_names.append(ident)
-    #    else:
-    #        route_names.append(wp)
-#
+    route_names = []
+    for wp in route:
+        if isinstance(wp, int) or (isinstance(wp, str) and wp.isdigit()):
+            ident = nav.wp_dict[int(wp)]['ident']
+            route_names.append(ident)
+        else:
+            route_names.append(wp)
+
     #print(' '.join(route_names))
 
-    close_waypoints = {}
+    final_route = {'Route':[] ,'id': None, 'idx': 0}
     if lat is not None and lon is not None:
       close_waypoints = Utils.get_close_waypoints(nav, lat=lat, lon=lon, path=output_file)
-
-
-    return close_waypoints
+      final_route['id'] = close_waypoints['id']
+      final_route['idx'] = close_waypoints['idx']
+    final_route['Route'] = route_names
+    #print(final_route)  
+    return final_route
 
     # optional ATC route demo
     #ATC_ROUTE = "KSFO/01L DCT BEBOP R464 BITTA INOYI1 PHNL/04L"
