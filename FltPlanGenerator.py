@@ -658,7 +658,7 @@ class RouteBuilder:
             self.nav.G.add_weighted_edges_from(self.nav.long_edge_list)
             try:
                 self.path = nx.shortest_path(self.nav.G, start_node, end_node, weight='weight')
-                print(self.path)
+                #print(self.path)
             except nx.NetworkXNoPath:
                 print("Still no path found; adding direct great circle route")
                 start_lat, start_lon = self.nav.get_coords(start_node)
