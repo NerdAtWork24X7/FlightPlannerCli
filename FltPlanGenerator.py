@@ -213,7 +213,7 @@ class NavGraph:
         JOIN airway a ON a.from_waypoint_id = w.waypoint_id OR a.to_waypoint_id = w.waypoint_id
         """
         airways_wps = self.db.read_sql(q_airways)
-        wps = pd.concat([bbox.assign(region=None), airways_wps], ignore_index=True).fillna('')
+        wps = pd.concat([airways_wps], ignore_index=True).fillna('')
         wps = wps.drop_duplicates(subset=['waypoint_id'], keep='first').reset_index(drop=True)
 
         route_km = Utils.haversine(self.dep_lat, self.dep_lon, self.dst_lat, self.dst_lon)
@@ -822,10 +822,12 @@ class PLNWriter:
 
             if isinstance(wp, int) or (isinstance(wp, str) and wp.isdigit()):
                 ident = self.nav.wp_dict[int(wp)]['ident']
+                region = self.nav.wp_dict[int(wp)].get('region', '')
                 lat_lon = self.nav.get_coords(wp)
             else:
                 ident = wp
                 lat_lon = self.nav.get_coords(wp)
+                region = ''
 
             if lat_lon and lat_lon[0] is not None:
               added.add(str(wp))
@@ -836,6 +838,8 @@ class PLNWriter:
               wpos = Utils.format_dms(lat, lon, self.cruise_alt_ft) if wp_type == 'Intersection' else Utils.format_dms(lat, lon, 0.0)
               etree.SubElement(atc, 'WorldPosition').text = wpos
               ica = etree.SubElement(atc, 'ICAO')
+              if wp_type == 'Intersection':
+                etree.SubElement(ica, 'ICAORegion').text = region
               etree.SubElement(ica, 'ICAOIdent').text = ident
 
         out_tree = etree.ElementTree(root)
@@ -943,7 +947,9 @@ def Create_plan_with_close_waypoint(db_path,dep=None, dest=None, output_file=OUT
 
 
 DB_PATH = "Database\little_navmap.sqlite"
+DEP_AIRPORT = "VABB"
+DEST_AIRPORT = "SCIP"
+OUTPUT_FILE = DEP_AIRPORT + "_" + DEST_AIRPORT + "_flt.pln"
 #Test call
-#close_waypoints = Create_plan_with_close_waypoint(db_path=DB_PATH,dep="NZAA", dest="NTAA", output_file="Cruise_flt.pln", include_sid=0, include_star=0,lat=50.78694534301758, lon=12.096664428710938 )
-#close_waypoints = Create_plan_with_close_waypoint(db_path=DB_PATH,dep="NZAA", dest="SCIP", output_file="Cruise_flt.pln", include_sid=0, include_star=0,lat=50.78694534301758, lon=12.096664428710938 )
+#close_waypoints = Create_plan_with_close_waypoint(db_path=DB_PATH,dep=DEP_AIRPORT, dest=DEST_AIRPORT, output_file=OUTPUT_FILE, include_sid=0, include_star=0,lat=50.78694534301758, lon=12.096664428710938 )
 #print(close_waypoints)
